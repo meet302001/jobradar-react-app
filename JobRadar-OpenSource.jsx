@@ -4,20 +4,58 @@ const DEFAULT_TITLES = ["DevOps","SRE","Site Reliability","Platform Engineer","I
 const DEFAULT_EXCLUSIONS = ["Senior Staff","Principal","Director","VP","Head of"];
 
 function parseCSV(text) {
-  const lines = text.split("\n");
-  if (lines.length < 2) return [];
-  const headers = lines[0].split(",").map(h => h.replace(/^"|"$/g, "").trim());
-  return lines.slice(1).filter(l => l.trim()).map(line => {
-    const values = [];
-    let current = "", inQ = false;
-    for (let i = 0; i < line.length; i++) {
-      if (line[i] === '"') inQ = !inQ;
-      else if (line[i] === "," && !inQ) { values.push(current.trim()); current = ""; }
-      else current += line[i];
+  const normalized = (text || "").replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
+  if (!normalized.trim()) return [];
+
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < normalized.length; i++) {
+    const ch = normalized[i];
+    const next = normalized[i + 1];
+
+    if (ch === '"') {
+      // Handle escaped quote inside quoted field ("")
+      if (inQuotes && next === '"') {
+        field += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
     }
-    values.push(current.trim());
+
+    if (ch === "," && !inQuotes) {
+      row.push(field.trim());
+      field = "";
+      continue;
+    }
+
+    if (ch === "\n" && !inQuotes) {
+      row.push(field.trim());
+      if (row.some(v => v !== "")) rows.push(row);
+      row = [];
+      field = "";
+      continue;
+    }
+
+    field += ch;
+  }
+
+  // Push last field/row if file doesn't end with newline
+  row.push(field.trim());
+  if (row.some(v => v !== "")) rows.push(row);
+
+  if (rows.length < 2) return [];
+
+  const headers = rows[0].map(h => h.replace(/^"|"$/g, "").trim());
+  return rows.slice(1).map(values => {
     const obj = {};
-    headers.forEach((h, i) => obj[h] = values[i] || "");
+    headers.forEach((h, i) => {
+      obj[h] = values[i] || "";
+    });
     return obj;
   });
 }
@@ -115,7 +153,12 @@ export default function App() {
       if (!res.ok) throw new Error(`Sheet returned ${res.status}. Make sure it's shared as "Anyone with the link → Viewer".`);
       const text = await res.text();
       const parsed = parseCSV(text);
-      if (parsed.length === 0) throw new Error("No data found. Make sure the sheet tab name matches and has data.");
+      if (parsed.length === 0) {
+        const preview = text.slice(0, 180).replace(/\s+/g, " ").trim();
+        throw new Error(
+          `No data rows parsed from tab "${cfg.sheetTab}". Verify tab name, sharing, and headers in row 1. Response preview: ${preview || "(empty response)"}`
+        );
+      }
       const skills = cfg.skills.map(s => s.toLowerCase());
       const t1 = cfg.tier1.map(s => s.toLowerCase());
       const t2 = cfg.tier2.map(s => s.toLowerCase());
